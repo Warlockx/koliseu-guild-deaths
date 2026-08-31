@@ -1,27 +1,33 @@
 name: notify-deaths
 
-# Runs every minute; each run polls the guildDeaths.board API twice, 40s apart
-# (pollsPerRun / pollIntervalSeconds in config.json), so the effective gap
-# between checks is ~40s. GitHub's scheduler may delay runs a few minutes
-# during load spikes — that's a platform limitation, not a bug here.
+# Near-real-time polling via a self-dispatching chain:
+#   - Each run polls the guildDeaths.board API several times, 40s apart
+#     (pollsPerRun / pollIntervalSeconds in config.json), commits state, then
+#     re-triggers the next run via workflow_dispatch (allowed with GITHUB_TOKEN).
+#   - The every-minute cron is only a WATCHDOG: GitHub's scheduler coalesces
+#     frequent crons (in practice ~every 10 min), so the cron alone can't
+#     deliver fast polling — the chain does. If the chain ever dies (failed
+#     dispatch, hung runner), the cron re-anchors it within ~10 min.
 on:
   schedule:
     - cron: '* * * * *'
   workflow_dispatch:
 
-# Never overlap two polling runs: a newer run cancels the older one. This also
-# prevents double notifications and git push races.
+# Never overlap two polling runs: a newer run cancels the older one. State is
+# committed after every poll, so a cancelled run loses nothing (worst case a
+# 1-2s window between a webhook send and its state push could re-send once).
 concurrency:
   group: notify-deaths
   cancel-in-progress: true
 
 permissions:
-  contents: write # to push state.json back
+  contents: write # push state.json back
+  actions: write  # workflow_dispatch the next cycle
 
 jobs:
   poll:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v5
         with:
@@ -63,3 +69,10 @@ jobs:
             fi
             i=$((i + 1))
           done
+
+      # Keep the chain alive: immediately schedule the next polling cycle.
+      # This is the documented GITHUB_TOKEN exception (workflow_dispatch).
+      - name: Dispatch next cycle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run notify-deaths.yml --repo "$GITHUB_REPOSITORY"

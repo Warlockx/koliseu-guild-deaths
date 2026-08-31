@@ -7,11 +7,14 @@ dependencies, no database). Currently watching **Grupo Anti Yoga** on world
 
 ## How it works
 
-1. Every minute, a GitHub Actions workflow runs `notify-deaths.mjs` (Node 22,
-   zero dependencies).
-2. Each run polls **twice, 40 seconds apart**, so the effective gap between
-   checks is ~40s. GitHub's scheduler can delay a run by a few minutes under
-   load — nothing hosted on GitHub can guarantee a hard 40s floor.
+1. The workflow runs as a **self-dispatching chain**: each run polls the API
+   several times (7 × 40s ≈ 5 min), commits state after every poll, then
+   re-triggers the next run via `workflow_dispatch`. Effective gap between
+   death checks is ~40-60s, sustained 24/7.
+2. The every-minute cron entry is only a **watchdog**: GitHub's scheduler
+   coalesces frequent crons (in practice `* * * * *` fires roughly every 10
+   minutes), so cron alone can't poll fast — the chain does. If the chain
+   ever dies, the cron re-anchors it within ~10 min.
 3. The script calls the same public tRPC endpoint the site's
    [Confronto de Guilds](https://koliseuot.com.br/community/guild-deaths) page
    uses:
@@ -60,7 +63,7 @@ DRY_RUN=1 node notify-deaths.mjs                                 # poll without 
 | `lookbackHours`       | size of the fetch window (12h ≈ ~60 deaths for this guild)      |
 | `tzOffsetMinutes`     | passed to the API like the site does (180 = America/Sao_Paulo)  |
 | `pollIntervalSeconds` | sleep between the in-run polls                                  |
-| `pollsPerRun`         | polls per workflow run (2 × 40s + 1min cron ≈ 40s max gap)      |
+| `pollsPerRun`         | polls per run (7 × 40s ≈ 5 min, then the run re-dispatches itself) |
 
 ## Caveats
 

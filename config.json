@@ -5,5 +5,5 @@
   "lookbackHours": 12,
   "tzOffsetMinutes": 180,
   "pollIntervalSeconds": 40,
-  "pollsPerRun": 2
+  "pollsPerRun": 7
 }
