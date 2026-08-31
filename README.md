@@ -11,10 +11,14 @@ dependencies, no database). Currently watching **Grupo Anti Yoga** on world
    several times (7 × 40s ≈ 5 min), commits state after every poll, then
    re-triggers the next run via `workflow_dispatch`. Effective gap between
    death checks is ~40-60s, sustained 24/7.
-2. The every-minute cron entry is only a **watchdog**: GitHub's scheduler
-   coalesces frequent crons (in practice `* * * * *` fires roughly every 10
-   minutes), so cron alone can't poll fast — the chain does. If the chain
-   ever dies, the cron re-anchors it within ~10 min.
+2. The cron is only a **watchdog**: GitHub's scheduler coalesces frequent crons
+   (in practice `* * * * *` fires roughly every 10 minutes), so cron alone
+   can't poll fast — the chain does. The watchdog fires at most every 5 min
+   just to re-anchor the chain if it ever dies. Because every run (even a
+   failed one) re-dispatches its successor, and push/pull races between
+   overlapping runs are recovered by resetting to origin, the chain is
+   self-healing; a cancelled or failed run costs at most one duplicate
+   notification in a rare 1-2s window.
 3. The script calls the same public tRPC endpoint the site's
    [Confronto de Guilds](https://koliseuot.com.br/community/guild-deaths) page
    uses:

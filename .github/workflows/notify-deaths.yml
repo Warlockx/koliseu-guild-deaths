@@ -4,18 +4,16 @@ name: notify-deaths
 #   - Each run polls the guildDeaths.board API several times, 40s apart
 #     (pollsPerRun / pollIntervalSeconds in config.json), commits state, then
 #     re-triggers the next run via workflow_dispatch (allowed with GITHUB_TOKEN).
-#   - The every-minute cron is only a WATCHDOG: GitHub's scheduler coalesces
-#     frequent crons (in practice ~every 10 min), so the cron alone can't
-#     deliver fast polling — the chain does. If the chain ever dies (failed
-#     dispatch, hung runner), the cron re-anchors it within ~10 min.
+#   - The cron is only a WATCHDOG to re-anchor the chain if it ever dies;
+#     it must not fight the chain, so it fires at most every 5 min.
 on:
   schedule:
-    - cron: '* * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 # Never overlap two polling runs: a newer run cancels the older one. State is
-# committed after every poll, so a cancelled run loses nothing (worst case a
-# 1-2s window between a webhook send and its state push could re-send once).
+# committed after every poll, so a cancelled run loses at most a 1-2s window
+# between a webhook send and its state push (worst case: one duplicate).
 concurrency:
   group: notify-deaths
   cancel-in-progress: true
@@ -38,6 +36,7 @@ jobs:
           node-version: 22
 
       - name: Poll guild deaths
+        id: poll
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
@@ -48,6 +47,16 @@ jobs:
           git config user.name "guild-deaths-bot"
           git config user.email "actions@users.noreply.github.com"
 
+          recover_from_origin() {
+            # another run won a push race: adopt its state and continue; the
+            # next poll re-checks deaths against that state (worst case one
+            # duplicate notification for deaths sent in this run's last poll)
+            echo "::warning::push/pull race with another run — resetting to origin/$BRANCH"
+            git rebase --abort 2>/dev/null || true
+            git fetch origin "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+          }
+
           i=1
           while true; do
             echo "--- poll $i of $POLLS ---"
@@ -56,23 +65,29 @@ jobs:
             if [ -n "$(git status --porcelain state.json)" ]; then
               git add state.json
               git commit -m "chore: update state [skip ci]"
-              git push origin "$BRANCH"
+              if ! git push origin "$BRANCH"; then
+                recover_from_origin
+              fi
             fi
 
             if [ "$i" -ge "$POLLS" ]; then break; fi
             sleep "$INTERVAL"
-            # pick up any state pushed elsewhere before polling again
             if ! git pull --rebase --autostash origin "$BRANCH"; then
-              git rebase --abort 2>/dev/null || true
-              git fetch origin "$BRANCH"
-              git reset --hard "origin/$BRANCH"
+              recover_from_origin
             fi
             i=$((i + 1))
           done
 
-      # Keep the chain alive: immediately schedule the next polling cycle.
-      # This is the documented GITHUB_TOKEN exception (workflow_dispatch).
+      # Keep the chain alive even when the poll step failed (transient API
+      # errors must not stop real-time monitoring). Back off a minute on
+      # failure so a persistent bug cannot create a tight crash loop.
       - name: Dispatch next cycle
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run notify-deaths.yml --repo "$GITHUB_REPOSITORY"
+        run: |
+          if [ "${{ steps.poll.outcome }}" = "failure" ]; then
+            echo "poll failed — backing off 60s before dispatching next cycle"
+            sleep 60
+          fi
+          gh workflow run notify-deaths.yml --repo "$GITHUB_REPOSITORY"
