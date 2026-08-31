@@ -1,0 +1,65 @@
+name: notify-deaths
+
+# Runs every minute; each run polls the guildDeaths.board API twice, 40s apart
+# (pollsPerRun / pollIntervalSeconds in config.json), so the effective gap
+# between checks is ~40s. GitHub's scheduler may delay runs a few minutes
+# during load spikes — that's a platform limitation, not a bug here.
+on:
+  schedule:
+    - cron: '* * * * *'
+  workflow_dispatch:
+
+# Never overlap two polling runs: a newer run cancels the older one. This also
+# prevents double notifications and git push races.
+concurrency:
+  group: notify-deaths
+  cancel-in-progress: true
+
+permissions:
+  contents: write # to push state.json back
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Poll guild deaths
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+          POLLS="$(jq -r '.pollsPerRun' config.json)"
+          INTERVAL="$(jq -r '.pollIntervalSeconds' config.json)"
+          BRANCH="${GITHUB_REF_NAME}"
+          git config user.name "guild-deaths-bot"
+          git config user.email "actions@users.noreply.github.com"
+
+          i=1
+          while true; do
+            echo "--- poll $i of $POLLS ---"
+            node notify-deaths.mjs
+
+            if [ -n "$(git status --porcelain state.json)" ]; then
+              git add state.json
+              git commit -m "chore: update state [skip ci]"
+              git push origin "$BRANCH"
+            fi
+
+            if [ "$i" -ge "$POLLS" ]; then break; fi
+            sleep "$INTERVAL"
+            # pick up any state pushed elsewhere before polling again
+            if ! git pull --rebase --autostash origin "$BRANCH"; then
+              git rebase --abort 2>/dev/null || true
+              git fetch origin "$BRANCH"
+              git reset --hard "origin/$BRANCH"
+            fi
+            i=$((i + 1))
+          done

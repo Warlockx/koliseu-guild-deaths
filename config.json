@@ -1,0 +1,9 @@
+{
+  "guildName": "Grupo Anti Yoga",
+  "guildId": 2,
+  "worldId": 2,
+  "lookbackHours": 12,
+  "tzOffsetMinutes": 180,
+  "pollIntervalSeconds": 40,
+  "pollsPerRun": 2
+}
