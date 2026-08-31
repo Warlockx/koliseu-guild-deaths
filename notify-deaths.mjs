@@ -161,7 +161,7 @@ async function sendDeaths(deaths, state) {
   const remember = (batch) => saveState(state, batch.map((d) => [deathKey(d), d.time]));
   for (let i = 0; i < deaths.length; i += 10) {
     const batch = deaths.slice(i, i + 10);
-    const payload = { username: "Koliseu Mortesperto", embeds: batch.map(buildEmbed) };
+    const payload = { embeds: batch.map(buildEmbed) };
     if (DRY_RUN) {
       log(`DRY_RUN: would send ${batch.length} embed(s):`, JSON.stringify(payload, null, 2));
       remember(batch);
@@ -185,7 +185,7 @@ async function main() {
       footer: { text: `${CONFIG.guildName} · mundo ${CONFIG.worldId === 2 ? "Season" : "Legacy"}` },
     };
     if (DRY_RUN) log("DRY_RUN: test embed:", JSON.stringify(embed));
-    else await postWebhook({ username: "Koliseu Mortesperto", embeds: [embed] });
+    else await postWebhook({ embeds: [embed] });
     log("test done");
     return;
   }
